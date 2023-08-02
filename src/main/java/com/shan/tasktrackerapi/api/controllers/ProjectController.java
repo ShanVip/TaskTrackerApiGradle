@@ -5,6 +5,7 @@ import com.shan.tasktrackerapi.api.dto.ProjectDto;
 import com.shan.tasktrackerapi.api.exceptions.BadRequestExceptions;
 import com.shan.tasktrackerapi.api.exceptions.NotFoundException;
 import com.shan.tasktrackerapi.api.factories.ProjectDtoFactory;
+import com.shan.tasktrackerapi.api.helpers.ControllerHelper;
 import com.shan.tasktrackerapi.store.entities.ProjectEntity;
 import com.shan.tasktrackerapi.store.repositories.ProjectRepository;
 import lombok.AccessLevel;
@@ -27,12 +28,13 @@ public class ProjectController {
 
     ProjectRepository projectRepository;
     ProjectDtoFactory projectDtoFactory;
+    ControllerHelper controllerHelper;
 
     public static final String FETCH_PROJECTS = "/api/projects/123";
     public static final String CREATE_OR_UPDATE_PROJECT = "/api/projects";
     public static final String DELETE_PROJECT = "/api/projects/{project_id}";
 
-    @PostMapping(FETCH_PROJECTS)
+    @GetMapping(FETCH_PROJECTS)
     public List<ProjectDto> fetchProjects(@RequestParam(value = "prefix_name", required = false)
                                           Optional<String> optionalPrefixName){
 
@@ -47,64 +49,72 @@ public class ProjectController {
                         .collect(Collectors.toList());
     }
 
-    @PostMapping(CREATE_OR_UPDATE_PROJECT)
-    public ProjectDto createProject(@RequestParam String name){
+    @PutMapping(CREATE_OR_UPDATE_PROJECT)
+    public ProjectDto createOrUpdateProject(
+            @RequestParam(value = "project_id", required = false) Optional<Long> optionalProjectId,
+            @RequestParam(value = "project_name", required = false) Optional<String> optionalProjectName
+            // Another params...
+    ) {
 
-        if(name.trim().isEmpty()){
-            new BadRequestExceptions("Name cant be empty");
+        optionalProjectName = optionalProjectName.filter(projectName -> !projectName.trim().isEmpty());
+
+        boolean isCreate = !optionalProjectId.isPresent();
+
+        if (isCreate && !optionalProjectName.isPresent()) {
+            throw new BadRequestExceptions("Project name can't be empty.");
         }
 
-        projectRepository
-                .findByName(name)
-                .ifPresent(project ->{
-                    throw new BadRequestExceptions(String.format("Project \"%s\" already exists.",name));
+        final ProjectEntity project = optionalProjectId
+                .map(this::getProjectOrThrowException)
+                .orElseGet(() -> ProjectEntity.builder().build());
+
+        optionalProjectName
+                .ifPresent(projectName -> {
+
+                    projectRepository
+                            .findByName(projectName)
+                            .filter(anotherProject -> !Objects.equals(anotherProject.getId(), project.getId()))
+                            .ifPresent(anotherProject -> {
+                                throw new BadRequestExceptions(
+                                        String.format("Project \"%s\" already exists.", projectName)
+                                );
+                            });
+
+                    project.setName(projectName);
                 });
 
-        ProjectEntity project = projectRepository.saveAndFlush(
-                ProjectEntity.builder()
-                        .name(name)
-                        .build()
-        );
+        final ProjectEntity savedProject = projectRepository.saveAndFlush(project);
 
-        return projectDtoFactory.makeProjectDto(project);
-    }
-
-    @PatchMapping("/asdasds")
-    public ProjectDto editProject(@RequestParam String name, @PathVariable("project_id") Long projectId){
-
-        if(name.trim().isEmpty()){
-            new BadRequestExceptions("Name cant be empty");
-        }
-
-        ProjectEntity project = projectRepository
-                .findById(projectId)
-                .orElseThrow(() ->new NotFoundException(String.format("Project \"%s\" doesnt exists.", projectId)));
-
-        projectRepository
-                .findByName(name)
-                .filter(anotherProject ->!Objects.equals(anotherProject.getId(), projectId))
-                .ifPresent(antherProject -> {
-                    throw new BadRequestExceptions(String.format("Project \"%s\" already exists.", name));
-                });
-
-        project.setName(name);
-
-        project = projectRepository.saveAndFlush(project);
-
-        return projectDtoFactory.makeProjectDto(project);
+        return projectDtoFactory.makeProjectDto(savedProject);
     }
 
     @DeleteMapping(DELETE_PROJECT)
     public AckDto deleteProject(@PathVariable("project_id") Long projectId){
 
-        projectRepository
-                .findById(projectId)
-                .orElseThrow(() ->new NotFoundException(String.format("Project \"%s\" doesnt exists.", projectId)));
+        getProjectOrThrowException(projectId);
 
         projectRepository.deleteById(projectId);
 
         return AckDto.makeDefault(true);
 
+    }
+
+
+
+
+
+    private ProjectEntity getProjectOrThrowException(Long projectId) {
+
+        return projectRepository
+                .findById(projectId)
+                .orElseThrow(() ->
+                        new NotFoundException(
+                                String.format(
+                                        "Project with \"%s\" doesn't exist.",
+                                        projectId
+                                )
+                        )
+                );
     }
 
 
